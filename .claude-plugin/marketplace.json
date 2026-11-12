@@ -1,0 +1,15 @@
+{
+  "name": "handoff",
+  "owner": {
+    "name": "rolottr",
+    "url": "https://github.com/rolottr"
+  },
+  "description": "Hand off a long conversation to a fresh session or another agent.",
+  "plugins": [
+    {
+      "name": "handoff",
+      "source": "./",
+      "description": "Writes a handoff message from this conversation for the next agent, then copies it, clears and carries it over, or leaves it for the next window."
+    }
+  ]
+}
