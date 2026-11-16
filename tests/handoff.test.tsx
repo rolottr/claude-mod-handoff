@@ -162,6 +162,26 @@ test('past 70% the band shows, and a handoff is written in the background', asyn
   await band.unmount()
 })
 
+test('a /clear drops the status entry and the band until the new window reports', async ($, on) => {
+  const { status } = engine(on)
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+
+  await start($)
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.session.measure({ context: { window: 200000, percent: 74 }, rateLimits: [], changed: ['context'] })
+  expect(status.at(-1)).toBe('ctx 74%')
+  expect(await band.find({ key: 'handoff' })).toBeDefined()
+
+  await $.session.end({ reason: 'clear', sessionId: 'one', resume: { id: 'one' } })
+  expect(status.at(-1)).toBeUndefined()
+  expect(await band.find({ key: 'handoff' })).toBeUndefined()
+
+  // The first measure of the new window, before any response: still nothing.
+  await $.session.measure({ context: { window: 200000 }, rateLimits: [], changed: ['context'] })
+  expect(status.at(-1)).toBeUndefined()
+  await band.unmount()
+})
+
 test('a handoff in the transcript is drawn as a card', async ($, on) => {
   engine(on)
   const ui = await $.ui.mount({

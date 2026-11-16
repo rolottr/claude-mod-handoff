@@ -359,6 +359,15 @@ function card($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']
   )
 }
 
+// Forgets the context's fill: the status entry, the band, and the
+// thresholds the background handoffs count from.
+async function resetFill($: EngineInterface): Promise<void> {
+  await update($, context, () => null)
+  await update($, autoAt, () => null)
+  await update($, laterAt, () => null)
+  $.ui.status(undefined)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -403,12 +412,33 @@ export const register: Register = on => {
     return result
   })
 
+  // A /clear ends the conversation with no session.start after it, and the
+  // next session.measure only comes once the new window's first turn ends:
+  // drop the old fill now, so the status line and the band go with it.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') {
+      await resetFill($)
+    }
+
+    return next(e)
+  })
+
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    await resetFill($)
+
+    return result
+  })
+
   // After each turn: the context's fill on the status line, and past
   // BAND_AT a handoff written in the background, so it is ready when the
   // person asks for it.
   on('session.measure', async ($, e, next) => {
     const result = await next(e)
     if (e.context.percent === undefined) {
+      // No response in this window yet: what was shown is an older window's.
+      await resetFill($)
+
       return result
     }
     const percent = Math.round(e.context.percent)
