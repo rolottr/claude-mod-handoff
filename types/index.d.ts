@@ -19,6 +19,8 @@ export type HandoffEntry = {
   sessionId: string
   /** Written in the background when the context filled up, at this percent. */
   autoAt: number | null
+  /** The turns the conversation had when it was written; absent in handoffs of earlier versions. */
+  turns?: number
 }
 
 /** A handoff that came in with a /goal: the goal line and the rest. */
@@ -54,6 +56,12 @@ declare module 'claude-code' {
       isAutoWriting: boolean
       /** The handoff the last /goal carried to the model, shown as a card above the prompt until the next prompt. */
       arrived: Carried | null
+      /** The turns the conversation has had, as of the last measurement. */
+      turn: number | null
+      /** The background tasks a background handoff is waiting for; null when it waits for none. */
+      waitingOn: number | null
+      /** Why the last background handoff was not written; null once one is. */
+      failed: string | null
     }
   }
 }

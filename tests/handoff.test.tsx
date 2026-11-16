@@ -47,6 +47,11 @@ function store(on: On, entries: Record<string, unknown> = {}) {
 // The engine beneath the mod: a session in ROOT whose forks answer `replies`
 // in turn (the last one again when they run out).
 function engine(on: On, { replies = [HANDOFF], sessionId = 'one', entries = {} }: { replies?: string[]; sessionId?: string; entries?: Record<string, unknown> } = {}) {
+  // What the test moves: the turns the conversation has had, the subagents
+  // running, and whether a fork answers at all.
+  const world = { turns: 1, agents: 0, isHung: false }
+  on('session.turns', () => ({ value: world.turns }))
+  on('agent.list', () => ({ value: Array.from({ length: world.agents }, (_, i) => ({ id: `a${i}`, description: 'work', type: 'general-purpose', status: 'running' })) }) as never)
   const clock = mock.clock(on)
   const kept = store(on, entries)
   const asked: string[] = []
@@ -65,6 +70,9 @@ function engine(on: On, { replies = [HANDOFF], sessionId = 'one', entries = {} }
   on('session.measure', (_, e) => ({ changed: e.changed }))
   on('model.fork', (_, e) => {
     asked.push(e.prompt)
+    if (world.isHung) {
+      return new Promise<never>(() => {})
+    }
     const text: string = replies[Math.min(asked.length, replies.length) - 1] ?? HANDOFF
     return { value: { isAnswered: true, text, usage: USAGE } }
   })
@@ -74,7 +82,7 @@ function engine(on: On, { replies = [HANDOFF], sessionId = 'one', entries = {} }
   })
   on('prompt.paint', (_, e) => ({ value: { isPainted: true, text: e.text ?? '', cursor: 0 } }))
 
-  return { clock, kept, asked, filled, status }
+  return { clock, kept, asked, filled, status, world }
 }
 
 const start = ($: Parameters<TestBody>[0], surface: 'terminal' | 'desktop' = 'terminal') =>
@@ -95,7 +103,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
 
     expect((await ui.find({ key: 'write' }))?.text).toContain('Write handoff')
-    expect((await ui.find({ key: 'cap' }))?.text).toContain('3,000 chars')
+    expect((await ui.find({ key: 'cap' }))?.text).toContain('no cap')
+    await ui.press({ key: 'cap' })
+    expect((await ui.find({ key: 'cap' }))?.text).toContain('1,000 chars')
+    await ui.press({ key: 'cap' })
     await ui.press({ key: 'cap' })
     expect((await ui.find({ key: 'cap' }))?.text).toContain('no cap')
     await ui.press({ key: 'reader' })
@@ -107,6 +118,11 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(asked[0]).toContain('may not be Claude')
     expect(asked[0]).not.toContain('User preferences:')
     expect(asked[0]).toContain('The very first line is `/goal <condition>`')
+    // What the next session needs most: the three states of the work, the
+    // user's latest request, and whose words count as the user's.
+    expect(asked[0]).toContain('done but not verified')
+    expect(asked[0]).toContain('quote that request word for word')
+    expect(asked[0]).toContain('Only the messages the user typed')
 
     await ui.press({ key: 'copy' })
     expect(copied).toEqual([HANDOFF])
@@ -277,4 +293,81 @@ test('the session that saved a handoff does not take it back', async ($, on) => 
 
   expect(filled).toEqual([])
   expect(kept.has(`pending:${ROOT}`)).toBe(true)
+})
+
+test('a handoff the conversation went past is marked, and Hand off writes a new one', async ($, on) => {
+  const { asked, clock, world } = engine(on)
+
+  await start($)
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.session.measure({ context: { window: 200000, percent: 74 }, rateLimits: [], changed: ['context'] })
+  await clock.advance(10)
+  expect(asked).toHaveLength(1)
+  expect(await band.find({ type: 'Text', text: /a handoff is ready/ })).toBeDefined()
+
+  // Two more turns, not enough fill for another background handoff.
+  world.turns = 3
+  await $.session.measure({ context: { window: 200000, percent: 76 }, rateLimits: [], changed: ['context'] })
+  await clock.advance(10)
+  expect(asked).toHaveLength(1)
+  expect(await band.find({ type: 'Text', text: /2 turns old/ })).toBeDefined()
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await band.press({ key: 'handoff' })
+  await clock.advance(10)
+  expect(asked).toHaveLength(2)
+  expect(await pane.find({ type: 'Text', text: /the conversation went on since/ })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: /turns old/ })).toBeUndefined()
+  await pane.unmount()
+  await band.unmount()
+})
+
+test('a background handoff waits for background work, up to 90%', async ($, on) => {
+  const { asked, clock, world } = engine(on)
+  on('classic.Stop', () => ({}) as never)
+  const stop = (tasks: { status: string }[]) =>
+    $.classic.Stop({ hook_event_name: 'Stop', stop_hook_active: false, background_tasks: tasks, session_crons: [] } as never)
+
+  await start($)
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await stop([{ status: 'running' }, { status: 'completed' }])
+  world.agents = 1
+  await $.session.measure({ context: { window: 200000, percent: 74 }, rateLimits: [], changed: ['context'] })
+  await clock.advance(10)
+  expect(asked).toHaveLength(0)
+  expect(await band.find({ type: 'Text', text: /waiting for 2 background tasks/ })).toBeDefined()
+
+  // The work is over: the stop that says so writes the handoff.
+  world.agents = 0
+  await stop([{ status: 'completed' }])
+  await clock.advance(10)
+  expect(asked).toHaveLength(1)
+  expect(await band.find({ type: 'Text', text: /a handoff is ready/ })).toBeDefined()
+
+  // Past 90% it is written with work still running.
+  world.agents = 2
+  await $.session.measure({ context: { window: 200000, percent: 91 }, rateLimits: [], changed: ['context'] })
+  await clock.advance(10)
+  expect(asked).toHaveLength(2)
+  await band.unmount()
+})
+
+test('a fork that never answers is given up on after 5 minutes', async ($, on) => {
+  const { asked, clock, world } = engine(on)
+
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  world.isHung = true
+  await ui.press({ key: 'write' })
+  await clock.advance(10)
+  expect(await ui.find({ text: /Writing the handoff/ })).toBeDefined()
+  await clock.advance(5 * 60 * 1000)
+  expect(await ui.find({ type: 'Text', text: /took more than 5 minutes/ })).toBeDefined()
+
+  // The next write is not held back by the one that hung.
+  world.isHung = false
+  await ui.press({ key: 'write' })
+  expect(asked).toHaveLength(2)
+  expect(await ui.find({ key: 'copy' })).toBeDefined()
+  await ui.unmount()
 })

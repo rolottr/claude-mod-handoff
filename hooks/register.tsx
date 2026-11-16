@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderSurface } from 'claude-code'
+import type { EngineInterface, Register, RenderSurface, Timer } from 'claude-code'
 
-import type { Carried, HandoffEntry, HandoffOptions, PendingHandoff, Reader, SectionId } from '../types'
+import type { Carried, HandoffEntry, HandoffOptions, PendingHandoff, SectionId } from '../types'
+import { buildPrompt, capLabel, clean, READERS, SECTIONS, shortenPrompt } from './prompt'
 import { ago, isHandoff, lineDiff, parse, splitGoal, withGoal } from './text'
 
 const PANE = 'handoff'
@@ -10,8 +11,10 @@ const WIDTH = 76
 const MIN_WIDTH = 48
 
 // Length presets, cycled with `l`. Any other cap comes from `/handoff <n>`.
-const CAPS: (number | null)[] = [1000, 3000, null]
-const DEFAULT_CAP = 3000
+// No cap is the default: a cap cuts what the next session needs most (the
+// user's limits, the background of open questions, facts already found).
+const CAPS: (number | null)[] = [null, 1000, 3000]
+const DEFAULT_CAP: number | null = null
 
 // The context fill, in percent, that shows the status entry, and the one
 // that shows the band and writes a handoff in the background. Another
@@ -20,21 +23,21 @@ const STATUS_AT = 50
 const BAND_AT = 70
 const AUTO_STEP = 10
 
+// A background handoff waits while background work is still running, so it
+// is not written mid-flight; past this fill it is written anyway.
+const DEFER_UNTIL = 90
+
+// A fork cannot be cancelled: past this the mod stops waiting for it.
+const WRITE_TIMEOUT_MS = 5 * 60 * 1000
+
+// The statuses of a background task that is over.
+const STOPPED = new Set(['completed', 'failed', 'killed', 'stopped', 'cancelled', 'canceled', 'error'])
+
 // Handoffs kept per project.
 const KEPT = 20
 
 // A saved handoff waits this long for the next window, then is dropped.
 const PENDING_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
-
-const SECTIONS: { id: SectionId; key: string; label: string; ask: string }[] = [
-  { id: 'goal', key: '1', label: 'Goal', ask: 'Goal: what the user wants in the end, and why.' },
-  { id: 'state', key: '2', label: 'State', ask: 'State: what is done, what works, and what was checked and how.' },
-  { id: 'next', key: '3', label: 'Next steps', ask: 'Next steps: an ordered list of concrete actions; the first one is where to start.' },
-  { id: 'files', key: '4', label: 'Files & commands', ask: 'Files and commands: exact paths, branches, URLs, and the commands to build, run and test.' },
-  { id: 'decisions', key: '5', label: 'Decisions & dead ends', ask: 'Decisions and dead ends: what was decided and why, what was tried and failed, so it is not tried again.' },
-  { id: 'prefs', key: '6', label: 'User preferences', ask: 'User preferences: how the user wants the work done, constraints they stated, what they rejected.' },
-  { id: 'questions', key: '7', label: 'Open questions', ask: 'Open questions: unknowns, blockers, and what to ask the user.' },
-]
 
 const DEFAULT_OPTIONS: HandoffOptions = {
   cap: DEFAULT_CAP,
@@ -42,7 +45,7 @@ const DEFAULT_OPTIONS: HandoffOptions = {
   sections: SECTIONS.map(s => s.id),
 }
 
-const options = atom({ plugin: 'handoff', key: 'options' } as const, DEFAULT_OPTIONS, { shape: 'options-1' })
+const options = atom({ plugin: 'handoff', key: 'options' } as const, DEFAULT_OPTIONS, { shape: 'options-2' })
 const phase = atom({ plugin: 'handoff', key: 'phase' } as const, 'options' as 'options' | 'writing' | 'ready')
 const history = atom({ plugin: 'handoff', key: 'history' } as const, [] as HandoffEntry[], { shape: 'history-1' })
 const shown = atom({ plugin: 'handoff', key: 'shown' } as const, -1)
@@ -54,74 +57,9 @@ const laterAt = atom({ plugin: 'handoff', key: 'laterAt' } as const, null as num
 const autoAt = atom({ plugin: 'handoff', key: 'autoAt' } as const, null as number | null)
 const isAutoWriting = atom({ plugin: 'handoff', key: 'isAutoWriting' } as const, false)
 const arrived = atom({ plugin: 'handoff', key: 'arrived' } as const, null as Carried | null)
-
-const READERS: Record<Reader, { label: string; who: string }> = {
-  claude: {
-    label: 'Claude',
-    who: 'The reader is another Claude Code session in the same project, with the same tools, but with none of this conversation. Name files, commands and tools as they are.',
-  },
-  agent: {
-    label: 'Any agent',
-    who: 'The reader is another AI agent, which may not be Claude and may not have Claude Code. Do not name Claude Code tools, slash commands, skills, hooks or memory files; say what to do in plain terms. The message must stand alone.',
-  },
-}
-
-function capLabel(cap: number | null): string {
-  return cap === null ? 'no cap' : `${cap.toLocaleString('en-US')} chars`
-}
-
-function buildPrompt(o: HandoffOptions): string {
-  const asks = SECTIONS.filter(s => o.sections.includes(s.id)).map(s => `- ${s.ask}`)
-  const limit =
-    o.cap === null
-      ? 'There is no length limit, but write nothing that the next agent does not need.'
-      : `Hard limit: ${o.cap} characters in all, markdown included. Aim for about ${Math.round(o.cap * 0.85)}. Cut the least useful detail first.`
-
-  return [
-    'Stop the current work for a moment. You have no tools for this answer: reply at once with text only.',
-    '',
-    'Write a handoff message: the first message of a new conversation that continues the work of this one. The next agent will read only this message, so it must be enough to go on without asking what happened.',
-    '',
-    READERS[o.reader].who,
-    '',
-    'Cover these parts, in this order, each under a short `##` heading. Leave out a part that has nothing in it:',
-    ...asks,
-    '',
-    'Rules:',
-    ...(o.sections.includes('goal')
-      ? [
-          '- The very first line is `/goal <condition>`: the goal as one completion condition that a separate evaluator can check from the conversation (for example "all tests in test/auth pass (bun test exits 0)"). One line, at most 500 characters, nothing before it.',
-          '- The second line is `# Handoff: <the task in a few words>`.',
-        ]
-      : ['- Start with one line: `# Handoff: <the task in a few words>`.']),
-    '- Write to the next agent as "you". Be literal and dense: exact paths, names, commands, error texts, numbers. No praise, no filler, no history for its own sake.',
-    '- Say what is verified and what is only assumed.',
-    '- Never include secrets: API keys, tokens, passwords, private URLs with credentials.',
-    '- Leave out this request to write a handoff.',
-    '- End with one line: `Start by: <the first action>`.',
-    `- ${limit}`,
-    '',
-    'Reply with the message alone: no preamble, no closing words, no code fence around it.',
-  ].join('\n')
-}
-
-function shortenPrompt(draft: string, cap: number): string {
-  return [
-    'You have no tools for this answer: reply at once with text only.',
-    `This handoff message has ${draft.length} characters. Rewrite it in at most ${cap} characters, markdown included. Keep the first \`/goal\` line as it is if there is one, the headings, the exact paths and commands, the next steps and the "Start by" line; cut the least useful detail first. Reply with the message alone.`,
-    '',
-    '<handoff>',
-    draft,
-    '</handoff>',
-  ].join('\n')
-}
-
-function clean(reply: string): string {
-  // A model that fences its whole answer anyway: take the fence off.
-  const fenced = reply.trim().match(/^```(?:markdown|md)?\n([\s\S]*?)\n```$/)
-
-  return (fenced?.[1] ?? reply).trim()
-}
+const turn = atom({ plugin: 'handoff', key: 'turn' } as const, null as number | null)
+const waitingOn = atom({ plugin: 'handoff', key: 'waitingOn' } as const, null as number | null)
+const failed = atom({ plugin: 'handoff', key: 'failed' } as const, null as string | null)
 
 async function say($: EngineInterface, line: string) {
   await update($, notice, () => line)
@@ -166,13 +104,57 @@ function pick(list: readonly HandoffEntry[], at: number): { entry: HandoffEntry;
   return entry === undefined ? undefined : { entry, index }
 }
 
+/**
+ * How many turns the conversation went on after this session wrote `entry`:
+ * 0 for a handoff that still holds it all, or one of another session.
+ */
+function behind(entry: HandoffEntry, sessionId: string, now: number | null): number {
+  if (entry.sessionId !== sessionId || entry.turns === undefined || now === null) {
+    return 0
+  }
+
+  return Math.max(0, now - entry.turns)
+}
+
+type Fork = Awaited<ReturnType<EngineInterface['model']['fork']>>
+type Answer = Fork | { isAnswered: false; reason: 'timeout' }
+
+/** One question over the conversation, given up on after WRITE_TIMEOUT_MS. */
+async function ask($: EngineInterface, prompt: string): Promise<Answer> {
+  let timer: Timer | undefined
+  const late = new Promise<Answer>(resolve => {
+    timer = $.clock.after(WRITE_TIMEOUT_MS, () => resolve({ isAnswered: false, reason: 'timeout' }))
+  })
+  try {
+    return await Promise.race([$.model.fork({ prompt }), late])
+  } finally {
+    timer?.cancel()
+  }
+}
+
+function whyNot(reply: Exclude<Answer, { isAnswered: true }>): string {
+  return reply.reason === 'nothing-to-fork'
+    ? 'there is no conversation to hand off yet (or it was just cleared).'
+    : reply.reason === 'api-error'
+      ? `the API answered ${reply.status ?? 'with an error'}.`
+      : reply.reason === 'aborted'
+        ? 'it was interrupted.'
+        : reply.reason === 'timeout'
+          ? 'it took more than 5 minutes.'
+          : 'the model gave no text.'
+}
+
 // One write at a time, whether the person asked or the context filled up.
 let isBusy = false
+
+// Background tasks and one-shot schedules still to come, as the last stop
+// of the main conversation reported them.
+let inFlight = 0
 
 /**
  * Writes a handoff from this conversation and adds it to the history.
  * `autoPercent` marks one written in the background: it leaves the pane's
- * phase alone and says nothing when it fails.
+ * phase alone, and a failure shows on the band, not as a notice.
  */
 async function write($: EngineInterface, autoPercent: number | null = null) {
   if (isBusy) {
@@ -198,23 +180,21 @@ async function write($: EngineInterface, autoPercent: number | null = null) {
   }
 
   try {
-    let reply = await $.model.fork({ prompt: buildPrompt(o) })
+    // The turns the conversation had when the question was asked: a turn
+    // that ends while it is answered is not in the handoff.
+    const turns = await $.session.turns()
+    let reply = await ask($, buildPrompt(o))
     if (reply.isAnswered && o.cap !== null && clean(reply.text).length > o.cap) {
       const longer = clean(reply.text)
-      const shorter = await $.model.fork({ prompt: shortenPrompt(longer, o.cap) })
+      const shorter = await ask($, shortenPrompt(longer, o.cap))
       reply = shorter.isAnswered && clean(shorter.text).length < longer.length ? shorter : reply
     }
 
     if (!reply.isAnswered) {
-      if (!isAuto) {
-        const why =
-          reply.reason === 'nothing-to-fork'
-            ? 'there is no conversation to hand off yet (or it was just cleared).'
-            : reply.reason === 'api-error'
-              ? `the API answered ${reply.status ?? 'with an error'}.`
-              : reply.reason === 'aborted'
-                ? 'it was interrupted.'
-                : 'the model gave no text.'
+      const why = whyNot(reply)
+      if (isAuto) {
+        await update($, failed, () => why)
+      } else {
         const hasAny = (await read($, history)).length > 0
         await update($, phase, () => (hasAny ? 'ready' : 'options'))
         await say($, `Could not write the handoff: ${why}`)
@@ -226,7 +206,8 @@ async function write($: EngineInterface, autoPercent: number | null = null) {
     const text = clean(reply.text)
     const createdAt = await $.clock.now()
     const sessionId = await $.session.id()
-    await changeHistory($, list => [...list, { id: (list[list.length - 1]?.id ?? 0) + 1, text, createdAt, sessionId, autoAt: autoPercent }])
+    await changeHistory($, list => [...list, { id: (list[list.length - 1]?.id ?? 0) + 1, text, createdAt, sessionId, autoAt: autoPercent, turns }])
+    await update($, failed, () => null)
     await update($, shown, () => -1)
     await update($, view, () => 'text')
     await update($, isEditingGoal, () => false)
@@ -318,13 +299,55 @@ async function openPane($: EngineInterface) {
 
 /** Opens the pane on the newest handoff, or on the options when there is none. */
 async function openOnNewest($: EngineInterface) {
-  const hasAny = (await read($, history)).length > 0
+  const newest = pick(await read($, history), -1)
   if ((await read($, phase)) !== 'writing') {
-    await update($, phase, () => (hasAny ? 'ready' : 'options'))
+    await update($, phase, () => (newest === undefined ? 'options' : 'ready'))
   }
   await update($, shown, () => -1)
+  const opened = await openPane($)
 
-  return openPane($)
+  // The conversation went on since the newest was written: write it again
+  // now, so what is carried over holds the last turns too.
+  if (newest !== undefined && !isBusy && behind(newest.entry, await $.session.id(), await read($, turn)) > 0) {
+    void write($)
+  }
+
+  return opened
+}
+
+async function runningAgents($: EngineInterface): Promise<number> {
+  try {
+    return (await $.agent.list()).filter(a => a.status === 'running').length
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Past BAND_AT, writes a handoff in the background, and another each
+ * AUTO_STEP points. While background work is running it waits, so the
+ * handoff is not written with results still to come.
+ */
+async function autoCheck($: EngineInterface): Promise<void> {
+  const percent = await read($, context)
+  if (percent === null || percent < BAND_AT) {
+    return
+  }
+  const last = await read($, autoAt)
+  if (isBusy || (last !== null && percent < last + AUTO_STEP)) {
+    await update($, waitingOn, () => null)
+
+    return
+  }
+  const running = inFlight + (await runningAgents($))
+  if (running > 0 && percent < DEFER_UNTIL) {
+    await update($, waitingOn, () => running)
+
+    return
+  }
+  await update($, waitingOn, () => null)
+  await update($, autoAt, () => percent)
+  void write($, percent)
 }
 
 /** A handoff drawn as a card: its title, goal, first action and size. */
@@ -365,6 +388,8 @@ async function resetFill($: EngineInterface): Promise<void> {
   await update($, context, () => null)
   await update($, autoAt, () => null)
   await update($, laterAt, () => null)
+  await update($, waitingOn, () => null)
+  await update($, failed, () => null)
   $.ui.status(undefined)
 }
 
@@ -443,20 +468,32 @@ export const register: Register = on => {
     }
     const percent = Math.round(e.context.percent)
     await update($, context, () => percent)
+    const turns = await $.session.turns()
+    await update($, turn, () => turns)
     $.ui.status(percent >= STATUS_AT ? `ctx ${percent}%` : undefined)
 
     if (percent < BAND_AT) {
       // A /clear or a compaction emptied it: start over.
       await update($, autoAt, () => null)
       await update($, laterAt, () => null)
+      await update($, waitingOn, () => null)
 
       return result
     }
+    await autoCheck($)
 
-    const last = await read($, autoAt)
-    if (!isBusy && (last === null || percent >= last + AUTO_STEP)) {
-      await update($, autoAt, () => percent)
-      void write($, percent)
+    return result
+  })
+
+  // Each stop of the main conversation says what background work is still
+  // to come; a background handoff waits for it.
+  on('classic.Stop', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agent_id === undefined) {
+      const tasks = (e.background_tasks ?? []).filter(t => !STOPPED.has(t.status)).length
+      const wakeups = (e.session_crons ?? []).filter(c => !c.recurring).length
+      inFlight = tasks + wakeups
+      await autoCheck($)
     }
 
     return result
@@ -531,7 +568,12 @@ export const register: Register = on => {
       // A fresh /handoff opens on the options, unless a handoff was written
       // in the background since the context filled up.
       const newest = pick(await read($, history), -1)
-      const isFresh = newest !== undefined && newest.entry.autoAt !== null && newest.entry.sessionId === (await $.session.id())
+      const sessionId = await $.session.id()
+      const isFresh =
+        newest !== undefined &&
+        newest.entry.autoAt !== null &&
+        newest.entry.sessionId === sessionId &&
+        behind(newest.entry, sessionId, await read($, turn)) === 0
       await update($, phase, () => (isFresh ? 'ready' : 'options'))
       await update($, shown, () => -1)
     }
@@ -570,12 +612,29 @@ export const register: Register = on => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const isWriting = (await read($, isAutoWriting)) || (await read($, phase)) === 'writing'
     const newest = pick(await read($, history), -1)
-    const isReady = !isWriting && newest !== undefined && newest.entry.autoAt !== null && newest.entry.sessionId === (await $.session.id())
+    const sessionId = await $.session.id()
+    const isMine = newest !== undefined && newest.entry.autoAt !== null && newest.entry.sessionId === sessionId
+    const old = newest === undefined ? 0 : behind(newest.entry, sessionId, await read($, turn))
+    const waiting = await read($, waitingOn)
+    const why = await read($, failed)
+    const state = isWriting
+      ? 'writing a handoff…'
+      : waiting !== null
+        ? `waiting for ${waiting} background ${waiting === 1 ? 'task' : 'tasks'} before writing`
+        : why !== null
+          ? `the handoff was not written: ${why}`
+          : isMine && old === 0
+            ? 'a handoff is ready'
+            : isMine
+              ? `the handoff is ${old} ${old === 1 ? 'turn' : 'turns'} old: h writes a new one`
+              : 'time to hand off'
 
     return (
       <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
         <Text color={percent >= 85 ? 'red' : 'yellow'}>● Context {percent}%</Text>
-        <Text dimColor>{isWriting ? 'writing a handoff…' : isReady ? 'a handoff is ready' : 'time to hand off'}</Text>
+        <Text key="band-state" dimColor={why === null || isWriting || waiting !== null} color={why !== null && !isWriting && waiting === null ? 'red' : undefined}>
+          {state}
+        </Text>
         <Button key="handoff" hotkey="h" plain variant="primary" label="Hand off" onPress={() => void openOnNewest($)} />
         <Button key="later" hotkey="z" plain dimColor label="Later" onPress={() => update($, laterAt, () => percent)} />
       </Box>
@@ -597,7 +656,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     terminalColumns = e.viewport?.columns ?? terminalColumns
-    const { Box, Button, Code, Input, Markdown, Text } = $.ui.resolve(e)
+    const { Box, Button, Code, Input, Markdown, Progress, Text } = $.ui.resolve(e)
     const o = await read($, options)
     const now = await read($, phase)
     const list = await read($, history)
@@ -609,10 +668,10 @@ export const register: Register = on => {
     if (now === 'writing') {
       return (
         <Box flexDirection="column" gap={1}>
-          <Text>
-            Writing the handoff from this conversation ({capLabel(o.cap)}, for {READERS[o.reader].label})…
+          <Progress key="writing" label={`Writing the handoff from this conversation (${capLabel(o.cap)}, for ${READERS[o.reader].label})`} />
+          <Text dimColor>
+            {o.cap === null ? 'With no cap this can take a minute or two.' : 'This takes a few seconds.'} You can close the pane; the result waits here.
           </Text>
-          <Text dimColor>This takes a few seconds. You can close the pane; the result waits here.</Text>
         </Box>
       )
     }
@@ -627,6 +686,7 @@ export const register: Register = on => {
       const isEditing = (await read($, isEditingGoal)) && info.goal !== null
       const isOver = o.cap !== null && text.length > o.cap
       const age = ago((await $.clock.now()) - entry.createdAt)
+      const old = behind(entry, await $.session.id(), await read($, turn))
       const run = (job: () => Promise<unknown>) => () => {
         void job()
       }
@@ -673,6 +733,11 @@ export const register: Register = on => {
                 {o.cap === null ? ' chars' : ` / ${capLabel(o.cap)}`}
               </Text>
             </Box>
+            {old > 0 && (
+              <Text key="stale" color="yellow">
+                Written {old} {old === 1 ? 'turn' : 'turns'} ago: the conversation went on since. g writes it again.
+              </Text>
+            )}
             {noticeRow}
             {rule}
           </Box>
@@ -716,7 +781,7 @@ export const register: Register = on => {
         <Box flexDirection="column">
           <Text dimColor>Length</Text>
           <Button key="cap" hotkey="l" plain label={capLabel(o.cap)} onPress={cycleCap} />
-          <Text dimColor>  1,000 → 3,000 → no cap. Any other: /handoff 2500</Text>
+          <Text dimColor>  no cap → 1,000 → 3,000. Any other: /handoff 2500</Text>
         </Box>
         <Box flexDirection="column">
           <Text dimColor>Reader</Text>

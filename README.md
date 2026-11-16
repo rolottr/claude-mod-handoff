@@ -15,10 +15,21 @@ No more "summarize everything so I can paste it in a new chat", then select, the
 ## What it does
 
 - **Steps in when the context fills up.** After each turn the mod reads how full the context is. At 50% it shows `ctx 50%` on the status line. At 70% a band appears above the prompt, `● Context 74% · h: Hand off · z: Later`, and the mod writes a handoff in the background, so it is ready when you press `h`. Another is written every 10 points after that.
+- **Waits for background work.** While subagents, background commands or scheduled wake-ups are still running, the background handoff waits, so it is not written with results still to come. Past 90% it is written anyway.
+- **Says when a handoff is old.** If the conversation went on after a handoff was written, the band and the pane say by how many turns, and `h` writes a new one.
+- **Keeps what the next session needs.** The handoff has no length cap by default. It quotes your limits in your own words, keeps what was verified apart from what was only done, names what is still running, and starts the next steps from your latest request.
 - **Opens with the goal.** With Goal on, the handoff starts with `/goal <condition>`. On Enter, `/goal` takes the first line as the session's completion condition, and the rest of the handoff goes to Claude with it, as context you never see as a row.
 - **Arrives as a card.** In the new session the handoff shows as a card above the prompt: title, the first step, its size and the goal. A handoff sent without a `/goal` line is drawn as the same card in the transcript; ctrl+o shows the whole text.
 - **Lets you fix the goal first.** `e` opens a field with the `/goal` condition, so you change it without editing the whole message.
 - **Keeps a history per project.** `k` and `j` step through the last 20 handoffs. `d` shows what changed from the one before.
+
+<p align="center">
+  <img src="assets/fill.webp" alt="The context fills from 38% to 77%. At 50% the status line shows the fill. At 70% a band appears above the prompt and waits for two background tasks, then a handoff is written in the background. Two turns later the band says the handoff is 2 turns old; pressing h writes a new one in a pane on the right." width="100%">
+</p>
+
+<p align="center">
+  <img src="assets/anatomy.webp" alt="Lines of a conversation become lines of the handoff: the user's limit is quoted under User preferences, a test run is marked verified, an edit is marked not verified, a subagent is marked still running, a hook's feedback is left out, the user's latest request starts the next steps, and a question is written with its options and a recommendation." width="100%">
+</p>
 
 ## Install
 
@@ -58,7 +69,7 @@ Run `/handoff`. The pane opens with the options:
 | In the pane | What it does |
 | --- | --- |
 | `g` Write handoff | Writes the handoff from this conversation. |
-| `l` Length | Cycles the cap: 1,000 → 3,000 (default) → no cap. For any other cap, run `/handoff 2500` or `/handoff 2k`. |
+| `l` Length | Cycles the cap: no cap (default) → 1,000 → 3,000. For any other cap, run `/handoff 2500` or `/handoff 2k`. With a cap, detail is cut to fit. |
 | `a` Reader | **Claude** (default): names files, commands and tools as they are. **Any agent**: plain terms, no Claude Code tool names, for a model that may not be Claude. |
 | `1`–`7` Include | Goal, State, Next steps, Files & commands, Decisions & dead ends, User preferences, Open questions. All are on by default. With Goal on, the handoff starts with a `/goal <condition>` line, so the next session sets the goal as its completion condition. |
 
@@ -89,14 +100,16 @@ Above the prompt, once the context is 70% full:
 
 | In the band | What it does |
 | --- | --- |
-| `h` Hand off | Opens the pane on the handoff written in the background. |
+| `h` Hand off | Opens the pane on the handoff written in the background. If the conversation went on since, it writes a new one first. |
 | `z` Later | Hides the band until the context is 10 points fuller. |
 
 Click the band, or press ctrl+x then tab, to give it the keyboard.
 
+The band also says what the background handoff is doing: `writing a handoff…`, `waiting for 2 background tasks before writing`, `a handoff is ready`, `the handoff is 2 turns old: h writes a new one`, or why it was not written.
+
 ## How it works
 
-The mod asks Claude one question over the conversation as Claude last saw it, with no tools, so the conversation is read from the prompt cache and the handoff costs one short answer. The question tells Claude who reads the handoff, which parts to write, to give exact paths and commands, to say what is verified and what is assumed, to leave out secrets, and to end with the first action to take. If the answer is over the cap, the mod asks once for a shorter version.
+The mod asks Claude one question over the conversation as Claude last saw it, with no tools, so the conversation is read from the prompt cache and the handoff costs one short answer. The question tells Claude who reads the handoff, which parts to write, to give exact paths and commands, to keep apart what is verified, what is done but not verified and what was only discussed, to quote your limits word for word, to treat only the messages you typed as your words, to leave out secrets, and to end with the first action to take. If you set a cap and the answer is over it, the mod asks once for a shorter version. With no cap, a handoff of a long conversation can take a minute or two to write; the mod stops waiting after 5 minutes.
 
 A handoff saved for the next window is kept on your computer. It waits up to 3 days, and only a different session in the same project takes it, once. The last 20 handoffs of each project are kept on your computer too.
 
@@ -117,6 +130,32 @@ claude plugin validate .
 claude plugin test .
 claude --plugin-dir .
 ```
+
+### Measuring a prompt change
+
+`tools/eval.mjs` measures a handoff by what happened after it. The questions are the handoffs you carried over on this computer; the answer is the conversation that followed: what you had to say again, what Claude looked up again, what it got wrong.
+
+```bash
+node tools/eval.mjs list                      # the handoffs that were carried over
+node tools/eval.mjs judge <session>           # score the handoff that session started with
+node tools/eval.mjs regen <session>           # write a handoff from an old session with the current prompt
+node tools/eval.mjs compare <session> a.md b.md
+```
+
+`judge` and `compare` run `claude -p` with no tools, on Haiku unless `EVAL_MODEL` names another model. `regen` resumes the whole old conversation once, so on a long session it is the costly step. To compare two prompts use `compare`, which judges both handoffs together in both orders; two `judge` scores do not compare, because a judge finds more to fault in a longer text.
+
+### README animations
+
+`assets/fill.webp` and `assets/anatomy.webp` are rendered from the pages in `assets/src`:
+
+```bash
+cd assets/src
+npm install --no-save playwright-core
+node render.mjs fill 15
+node render.mjs anatomy 15
+```
+
+This needs Google Chrome and `img2webp` from libwebp (`brew install webp`).
 
 ## License
 

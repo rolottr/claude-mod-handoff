@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Handoff: when the context fills up</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .meter { position: absolute; right: 48px; top: 58px; width: 400px; }
+  .meter .num { font: 700 30px var(--mono); text-align: right; }
+  .meter .track { margin-top: 8px; height: 10px; border-radius: 5px; background: #222a36; position: relative; }
+  .meter .fillbar { height: 100%; border-radius: 5px; }
+  .meter .tick { position: absolute; top: -4px; width: 2px; height: 18px; background: var(--muted); }
+  .meter .tl { position: absolute; top: 18px; font: 12px var(--mono); color: var(--muted); transform: translateX(-50%); }
+  .term { left: 48px; top: 172px; width: 760px; height: 448px; background: #0b0f14; }
+  #log { padding: 16px 22px 0; font: 15px/25px var(--mono); height: 300px; }
+  .ln { display: block; height: 25px; white-space: pre; }
+  #band { position: absolute; left: 22px; right: 22px; top: 290px; font: 15px/25px var(--mono); white-space: pre; }
+  #band .key { color: var(--cyan); font-weight: 700; }
+  .box { position: absolute; left: 22px; right: 22px; top: 352px; height: 44px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 14px; font: 15px var(--mono); color: var(--muted); }
+  #status { position: absolute; right: 24px; top: 408px; font: 13px var(--mono); color: var(--amber); }
+  .pane { left: 832px; top: 172px; width: 400px; height: 448px; }
+  .pane .body { padding: 14px 18px; font: 14px/23px var(--mono); }
+  .prog { height: 8px; border-radius: 4px; background: #222a36; overflow: hidden; margin: 10px 0 12px; }
+  .prog i { display: block; height: 100%; width: 34%; border-radius: 4px; background: var(--cyan); }
+  .btns { color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 8px; }
+  .btns b { color: var(--cyan); }
+  .hl { display: block; white-space: pre; }
+  .press { display: inline-block; border: 1px solid var(--cyan); border-radius: 6px; padding: 0 8px; color: var(--cyan); font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="brand">↪ <b>handoff</b></div>
+  <div class="title">When the context fills up</div>
+  <div class="sub">The mod reads the fill after each turn and keeps a handoff ready.</div>
+  <div class="meter">
+    <div class="num" id="num">38%</div>
+    <div class="track"><div class="fillbar" id="fillbar"></div>
+      <div class="tick" style="left:50%"></div><div class="tl" style="left:50%">50 status</div>
+      <div class="tick" style="left:70%"></div><div class="tl" style="left:70%">70 band</div>
+      <div class="tick" style="left:90%"></div><div class="tl" style="left:90%">90</div>
+    </div>
+  </div>
+  <div class="card term">
+    <div id="log"></div>
+    <div id="band"></div>
+    <div class="box">&gt; <span id="typed"></span></div>
+    <div id="status"></div>
+  </div>
+  <div class="card pane" id="pane"><h3>Handoff</h3><div class="body" id="panebody"></div></div>
+  <div class="caption" id="cap"></div>
+</div>
+<script src="common.js"></script>
+<script>
+const DURATION = 21000;
+// The fill over time: [ms, percent].
+const FILL = [[0, 38], [3000, 53], [6000, 72], [10500, 72], [13200, 77], [21000, 77]];
+const fillAt = (t) => { for (let i = 1; i < FILL.length; i++) { if (t <= FILL[i][0]) { const [a, x] = FILL[i - 1], [b, y] = FILL[i]; return lerp(x, y, (t - a) / (b - a)); } } return 77; };
+const SPIN = ['✻', '✶', '✳', '✢', '·', '✢', '✳', '✶'];
+// [html, at, done-at]: a background task shows running until done-at.
+const lines = [
+  ['<span class="dim">⏺ Edit(src/quantity-gate.ts)</span>', 400],
+  ['<span class="dim">⏺ Bash(npm run jest)</span>  <span class="ok">7,820 passed</span>', 1500],
+  ['<span class="k">⏺</span> Agent(review round 3)  <span class="dim">in the background</span>', 2600, 7000],
+  ['<span class="k">⏺</span> Bash(npm run build)  <span class="dim">in the background</span>', 3600, 7900],
+  ['<span class="dim">⏺ Review round 3: ship. Build passed.</span>', 8200],
+  ['<span class="dim">⏺ Edit(docs/history.md)</span>', 11200],
+  ['<span class="dim">⏺ Edit(docs/checklist.md)</span>', 12400],
+];
+$('#log').innerHTML = lines.map(([h]) => `<span class="ln">${h}</span>`).join('');
+const HANDOFF = [
+  '<span class="k">/goal</span> both reviewers say ship;',
+  '      jest and build exit 0',
+  '<b># Handoff: finish CEN-45</b>',
+  '',
+  '<span class="dim">## State</span>',
+  '<span class="ok">verified</span>  jest 7,820 passed',
+  '<span class="warn">not verified</span>  docs/history.md',
+  '<span class="dim">## Next steps</span>',
+  '1. “fix every finding, Low too”',
+  '<span class="dim">## User preferences</span>',
+  '“no new branches”',
+  '',
+  '<span class="dim">Start by:</span> review round 4',
+];
+const CAPS = [
+  [300, 'Under 50% the mod stays out of the way.'],
+  [3100, 'At <em>50%</em> the fill shows on the status line.'],
+  [6100, 'At <em>70%</em> a band appears. Background work is still running, so the handoff <em>waits</em>.'],
+  [8300, 'The work is over: the handoff is written <em>in the background</em>.'],
+  [11000, 'The conversation goes on. The band says the handoff is <em>2 turns old</em>.'],
+  [13700, '<em>h</em> writes a new one, with the last turns in it.'],
+  [17200, 'Copy it, clear and carry it over, or leave it for the next window.'],
+];
+function render(t) {
+  const p = fillAt(t);
+  $('#num').textContent = `${Math.round(p)}%`;
+  $('#num').style.color = p >= 70 ? 'var(--amber)' : 'var(--text)';
+  const bar = $('#fillbar'); bar.style.width = `${p}%`; bar.style.background = p >= 70 ? 'var(--amber)' : 'var(--blue)';
+  $$('#log .ln').forEach((el, i) => {
+    const [h, at, doneAt] = lines[i];
+    el.style.opacity = out3(prog(t, at, 250));
+    if (doneAt !== undefined) el.innerHTML = t >= doneAt ? h.replace('class="k">⏺', 'class="ok">✓').replace('in the background', 'done') : h;
+  });
+  $('#status').textContent = p >= 50 ? `ctx ${Math.round(p)}%` : '';
+  let state = '';
+  if (t >= 6000 && t < 7000) state = '<span class="dim">waiting for 2 background tasks before writing</span>';
+  else if (t >= 7000 && t < 7900) state = '<span class="dim">waiting for 1 background task before writing</span>';
+  else if (t >= 7900 && t < 10300) state = `<span class="dim">${SPIN[Math.floor(t / 120) % SPIN.length]} writing a handoff…</span>`;
+  else if (t >= 10300 && t < 11800) state = '<span class="ok">a handoff is ready</span>';
+  else if (t >= 11800 && t < 13000) state = '<span class="warn">the handoff is 1 turn old: h writes a new one</span>';
+  else if (t >= 13000 && t < 13600) state = '<span class="warn">the handoff is 2 turns old: h writes a new one</span>';
+  else if (t >= 13600 && t < 16800) state = `<span class="dim">${SPIN[Math.floor(t / 120) % SPIN.length]} writing a handoff…</span>`;
+  else if (t >= 16800) state = '<span class="ok">a handoff is ready</span>';
+  const pressed = t >= 13400 && t < 14000;
+  $('#band').innerHTML = t < 6000 ? '' : `<span class="warn">● Context ${Math.round(p)}%</span>  ${state}\n${pressed ? '<span class="press">h</span>' : '<span class="key">h</span>'}: Hand off · <span class="key">z</span>: Later`;
+  $('#band').style.opacity = out3(prog(t, 6000, 300));
+  const pane = $('#pane');
+  const k = out3(prog(t, 13600, 450));
+  pane.style.opacity = k; pane.style.transform = `translateX(${(1 - k) * 60}px)`;
+  if (t < 16800) {
+    const sweep = ((t - 13600) % 1400) / 1400;
+    $('#panebody').innerHTML = `Writing the handoff from this conversation (no cap, for Claude)<div class="prog"><i style="margin-left:${sweep * 100 - 17}%"></i></div><span class="dim">With no cap this can take a minute or two. You can close the pane; the result waits here.</span>`;
+  } else {
+    const n = Math.floor((t - 16800) / 90);
+    $('#panebody').innerHTML = '<div class="btns"><b>c</b> Copy  <b>x</b> Clear + carry over  <b>n</b> Next window</div>' + HANDOFF.slice(0, n).map((l) => `<span class="hl">${l || ' '}</span>`).join('');
+  }
+  let cap = '';
+  for (const [at, text] of CAPS) if (t >= at) cap = text;
+  $('#cap').innerHTML = cap;
+}
+</script>
+</body>
+</html>

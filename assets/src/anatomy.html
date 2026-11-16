@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Handoff: what the handoff carries</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .conv { left: 48px; top: 160px; width: 560px; height: 470px; }
+  .hand { left: 672px; top: 160px; width: 560px; height: 470px; }
+  .rows { padding: 10px 16px; }
+  .row { display: grid; grid-template-columns: 74px 1fr; gap: 0 10px; align-items: start; padding: 5px 10px; border-radius: 8px; border-left: 3px solid transparent; margin-bottom: 3px; font: 14px/21px var(--mono); }
+  .who { font: 700 12px/21px var(--mono); color: var(--muted); letter-spacing: .04em; }
+  .row .note { grid-column: 2; font: 12px/18px var(--sans); color: var(--muted); }
+  .arrow { position: absolute; left: 618px; top: 372px; width: 44px; text-align: center; font: 700 26px var(--sans); color: var(--cyan); }
+  .doc { padding: 12px 20px; font: 14px/22px var(--mono); }
+  .doc .h { display: block; color: var(--muted); margin-top: 6px; }
+  .doc .l { display: block; padding-left: 10px; border-left: 3px solid transparent; white-space: pre-wrap; }
+  .tag { display: inline-block; font: 700 11px var(--mono); padding: 1px 6px; border-radius: 5px; margin-right: 6px; }
+  .strike { text-decoration: line-through; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="brand">↪ <b>handoff</b></div>
+  <div class="title">What the handoff carries</div>
+  <div class="sub">Written from the whole conversation, for an agent that saw none of it.</div>
+  <div class="card conv"><h3>This conversation</h3><div class="rows" id="rows"></div></div>
+  <div class="arrow" id="arrow">→</div>
+  <div class="card hand"><h3>The handoff</h3><div class="doc" id="doc"></div></div>
+  <div class="caption" id="cap"></div>
+</div>
+<script src="common.js"></script>
+<script>
+const DURATION = 22000;
+const C = { user: '#39c5cf', ok: '#3fb950', warn: '#d29922', run: '#58a6ff', no: '#f85149', ask: '#bc8cff' };
+// [who, text, note, colour, the handoff line it becomes (id), at]
+const rows = [
+  ['USER', '“no new branches. ask before any tenant write.”', 'a limit, in the user\'s words', C.user, 'prefs', 1200],
+  ['TOOL', 'npm run jest → 7,820 passed', 'a check that ran, with its result', C.ok, 'verified', 3700],
+  ['CLAUDE', 'edited quantity-gate.ts, tests not run again', 'done, but not checked', C.warn, 'unverified', 6200],
+  ['AGENT', 'review round 5 … still running', 'work still to come', C.run, 'running', 8700],
+  ['HOOK', 'Stop hook feedback: run the linter', 'not the user\'s words: never written as a request', C.no, null, 11200],
+  ['USER', '“fix every finding, Low included”', 'the latest request', C.user, 'next', 13700],
+  ['CLAUDE', 'keep two routes, or merge them?', 'a question for the user', C.ask, 'ask', 16200],
+];
+$('#rows').innerHTML = rows.map(([who, text, note]) => `<div class="row"><span class="who">${who}</span><span class="t">${text}</span><span class="note">${note}</span></div>`).join('');
+const doc = [
+  ['h', '/goal', '<span class="k">/goal</span> both reviewers say ship; jest and build exit 0', 0],
+  ['h', 'title', '<b># Handoff: finish CEN-45</b>', 0],
+  ['h', null, '## State', 0],
+  ['l', 'verified', '<span class="tag" style="background:rgba(63,185,80,.18);color:#3fb950">verified</span>jest: 7,820 passed'],
+  ['l', 'unverified', '<span class="tag" style="background:rgba(210,153,34,.18);color:#d29922">not verified</span>quantity-gate.ts edited'],
+  ['l', 'running', '<span class="tag" style="background:rgba(88,166,255,.16);color:#58a6ff">still running</span>review round 5 (subagent)'],
+  ['h', null, '## Next steps', 0],
+  ['l', 'next', '1. “fix every finding, Low included”: 3 Lows left'],
+  ['h', null, '## User preferences', 0],
+  ['l', 'prefs', '“no new branches. ask before any tenant write.”'],
+  ['h', null, '## Open questions', 0],
+  ['l', 'ask', 'Two routes or one? A keeps both (no change); B merges (one fewer read). Recommend A.'],
+  ['h', 'start', '<span class="dim">Start by:</span> fixing the 3 Lows of round 4', 0],
+];
+$('#doc').innerHTML = doc.map(([kind, , html]) => `<span class="${kind}">${html}</span>`).join('');
+const CAPS = [
+  [0, 'One question over the conversation, read from the prompt cache.'],
+  [1200, 'The user\'s limits are <em>quoted</em>, not retold.'],
+  [3700, 'What was <em>verified</em> is kept apart from what was only done.'],
+  [8700, 'What is <em>still running</em> is said, so the next agent waits for it.'],
+  [11200, 'A hook\'s feedback is <em>not</em> the user speaking.'],
+  [13700, 'The first step follows the user\'s <em>latest request</em>.'],
+  [16200, 'A question comes with its options and a recommendation.'],
+  [18800, '<em>No length cap</em> by default: as long as the work needs.'],
+];
+function render(t) {
+  const picked = {};
+  $$('#rows .row').forEach((el, i) => {
+    const [, , , colour, to, at] = rows[i];
+    vis(el, t, at - 700);
+    const k = out3(prog(t, at, 400));
+    el.style.borderLeftColor = k > 0 ? colour : 'transparent';
+    el.style.background = `rgba(255,255,255,${0.05 * k * (1 - out3(prog(t, at + 2000, 500)))})`;
+    if (to === null) el.querySelector('.t').className = k > 0.5 ? 't strike' : 't';
+    else picked[to] = { at, colour };
+  });
+  $$('#doc span.h, #doc span.l').forEach((el, i) => {
+    const [kind, id] = doc[i];
+    if (kind === 'h') { el.style.opacity = id === 'start' ? out3(prog(t, 18000, 400)) : 0.35 + 0.65 * out3(prog(t, 300 + i * 60, 400)); return; }
+    const p = picked[id];
+    const k = out3(prog(t, p.at + 250, 450));
+    el.style.opacity = k;
+    el.style.transform = `translateX(${(1 - k) * -24}px)`;
+    el.style.borderLeftColor = p.colour;
+  });
+  const beat = rows.some(([, , , , to, at]) => to !== null && t >= at && t < at + 700);
+  $('#arrow').style.opacity = beat ? 1 : 0.25;
+  let cap = '';
+  for (const [at, text] of CAPS) if (t >= at) cap = text;
+  $('#cap').innerHTML = cap;
+}
+</script>
+</body>
+</html>
