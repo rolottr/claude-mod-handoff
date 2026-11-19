@@ -587,7 +587,11 @@ export const register: Register = on => {
     }
   })
 
-  // The band above the prompt, once the context passes BAND_AT.
+  // The band above the prompt, once the context passes BAND_AT. Its keys are
+  // digits: a digit typed in an empty prompt box presses a band Button, and
+  // a letter does so only once the band has the keyboard. They are 9 and 0
+  // because a hotkey is the mod's, not the site's: with the pane open, a
+  // band key the pane also uses (1 to 7, the parts) takes the pane's press.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // A handoff that just came in with a /goal: its card, until the next
     // prompt. The /goal row itself is the engine's alone.
@@ -598,7 +602,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {card($, e, came.text, `goal set: ${came.goal}`)}
-          <Button key="hide-card" hotkey="z" plain dimColor label="Hide" onPress={() => update($, arrived, () => null)} />
+          <Button key="hide-card" hotkey="0" plain dimColor label="Hide" onPress={() => update($, arrived, () => null)} />
         </Box>
       )
     }
@@ -626,7 +630,7 @@ export const register: Register = on => {
           : isMine && old === 0
             ? 'a handoff is ready'
             : isMine
-              ? `the handoff is ${old} ${old === 1 ? 'turn' : 'turns'} old: h writes a new one`
+              ? `the handoff is ${old} ${old === 1 ? 'turn' : 'turns'} old: 9 writes a new one`
               : 'time to hand off'
 
     return (
@@ -635,8 +639,8 @@ export const register: Register = on => {
         <Text key="band-state" dimColor={why === null || isWriting || waiting !== null} color={why !== null && !isWriting && waiting === null ? 'red' : undefined}>
           {state}
         </Text>
-        <Button key="handoff" hotkey="h" plain variant="primary" label="Hand off" onPress={() => void openOnNewest($)} />
-        <Button key="later" hotkey="z" plain dimColor label="Later" onPress={() => update($, laterAt, () => percent)} />
+        <Button key="handoff" hotkey="9" plain variant="primary" label="Hand off" onPress={() => void openOnNewest($)} />
+        <Button key="later" hotkey="0" plain dimColor label="Later" onPress={() => update($, laterAt, () => percent)} />
       </Box>
     )
   })

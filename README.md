@@ -14,7 +14,7 @@ No more "summarize everything so I can paste it in a new chat", then select, the
 
 ## What it does
 
-- **Steps in when the context fills up.** After each turn the mod reads how full the context is. At 50% it shows `ctx 50%` on the status line. At 70% a band appears above the prompt, `● Context 74% · h: Hand off · z: Later`, and the mod writes a handoff in the background, so it is ready when you press `h`. Another is written every 10 points after that.
+- **Steps in when the context fills up.** After each turn the mod reads how full the context is. At 50% it shows `ctx 50%` on the status line. At 70% a band appears above the prompt, `● Context 74% · 9: Hand off · 0: Later`, and the mod writes a handoff in the background, so it is ready when you press `9`. Another is written every 10 points after that.
 - **Waits for background work.** While subagents, background commands or scheduled wake-ups are still running, the background handoff waits, so it is not written with results still to come. Past 90% it is written anyway.
 - **Says when a handoff is old.** If the conversation went on after a handoff was written, the band and the pane say by how many turns, and `h` writes a new one.
 - **Keeps what the next session needs.** The handoff has no length cap by default. It quotes your limits in your own words, keeps what was verified apart from what was only done, names what is still running, and starts the next steps from your latest request.
@@ -24,7 +24,7 @@ No more "summarize everything so I can paste it in a new chat", then select, the
 - **Keeps a history per project.** `k` and `j` step through the last 20 handoffs. `d` shows what changed from the one before.
 
 <p align="center">
-  <img src="assets/fill.webp" alt="The context fills from 38% to 77%. At 50% the status line shows the fill. At 70% a band appears above the prompt and waits for two background tasks, then a handoff is written in the background. Two turns later the band says the handoff is 2 turns old; pressing h writes a new one in a pane on the right." width="100%">
+  <img src="assets/fill.webp" alt="The context fills from 38% to 77%. At 50% the status line shows the fill. At 70% a band appears above the prompt and waits for two background tasks, then a handoff is written in the background. Two turns later the band says the handoff is 2 turns old; pressing 9 writes a new one in a pane on the right." width="100%">
 </p>
 
 <p align="center">
@@ -100,12 +100,12 @@ Above the prompt, once the context is 70% full:
 
 | In the band | What it does |
 | --- | --- |
-| `h` Hand off | Opens the pane on the handoff written in the background. If the conversation went on since, it writes a new one first. |
-| `z` Later | Hides the band until the context is 10 points fuller. |
+| `9` Hand off | Opens the pane on the handoff written in the background. If the conversation went on since, it writes a new one first. |
+| `0` Later | Hides the band until the context is 10 points fuller. |
 
-Click the band, or press ctrl+x then tab, to give it the keyboard.
+Press the digit while the prompt box is empty. With text in the prompt box, click the band or press ctrl+x then tab first, so the band has the keyboard.
 
-The band also says what the background handoff is doing: `writing a handoff…`, `waiting for 2 background tasks before writing`, `a handoff is ready`, `the handoff is 2 turns old: h writes a new one`, or why it was not written.
+The band also says what the background handoff is doing: `writing a handoff…`, `waiting for 2 background tasks before writing`, `a handoff is ready`, `the handoff is 2 turns old: 9 writes a new one`, or why it was not written.
 
 ## How it works
 

@@ -164,6 +164,19 @@ test('past 70% the band shows, and a handoff is written in the background', asyn
   expect((await band.find({ type: 'Text', text: /Context 74%/ }))?.text).toContain('74%')
   expect(await band.find({ type: 'Text', text: /a handoff is ready/ })).toBeDefined()
 
+  // The band's keys are digits: a digit typed in an empty prompt box presses
+  // a band Button, a letter only once the band has the keyboard. None is a
+  // key of the pane: a hotkey is the mod's, so the band's would take it.
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const paneKeys = (await pane.findAll({ type: 'Button' })).map(b => b.props.hotkey)
+  expect(paneKeys).toContain('1')
+  for (const key of ['handoff', 'later']) {
+    const hotkey = (await band.find({ key }))?.props.hotkey
+    expect(hotkey).toMatch(/^[0-9]$/)
+    expect(paneKeys).not.toContain(hotkey)
+  }
+  await pane.unmount()
+
   // The same fill again writes nothing; 10 points more writes a new one.
   await $.session.measure({ context: { window: 200000, percent: 78 }, rateLimits: [], changed: ['context'] })
   await clock.advance(10)
@@ -237,6 +250,7 @@ test('a /goal prompt that holds a handoff sets the goal line and carries the res
   const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await band.find({ type: 'Text', text: /↪ Handoff/ })).toBeDefined()
   expect((await band.find({ type: 'Text', text: /goal set/ }))?.text).toContain('all tests pass')
+  expect((await band.find({ key: 'hide-card' }))?.props.hotkey).toMatch(/^[0-9]$/)
   await band.press({ key: 'hide-card' })
   expect(await band.find({ type: 'Text', text: /↪ Handoff/ })).toBeUndefined()
   await band.unmount()
@@ -310,7 +324,7 @@ test('a handoff the conversation went past is marked, and Hand off writes a new 
   await $.session.measure({ context: { window: 200000, percent: 76 }, rateLimits: [], changed: ['context'] })
   await clock.advance(10)
   expect(asked).toHaveLength(1)
-  expect(await band.find({ type: 'Text', text: /2 turns old/ })).toBeDefined()
+  expect((await band.find({ type: 'Text', text: /2 turns old/ }))?.text).toContain('9 writes a new one')
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await band.press({ key: 'handoff' })

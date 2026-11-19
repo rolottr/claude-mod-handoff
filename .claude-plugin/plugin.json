@@ -1,6 +1,6 @@
 {
   "name": "handoff",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Writes a handoff message from this conversation for the next agent, then copies it, clears and carries it over, or leaves it for the next window.",
   "author": { "name": "rolottr", "url": "https://github.com/rolottr" },
   "homepage": "https://github.com/rolottr/claude-mod-handoff",

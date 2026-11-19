@@ -89,7 +89,7 @@ const CAPS = [
   [6100, 'At <em>70%</em> a band appears. Background work is still running, so the handoff <em>waits</em>.'],
   [8300, 'The work is over: the handoff is written <em>in the background</em>.'],
   [11000, 'The conversation goes on. The band says the handoff is <em>2 turns old</em>.'],
-  [13700, '<em>h</em> writes a new one, with the last turns in it.'],
+  [13700, '<em>9</em> writes a new one, with the last turns in it.'],
   [17200, 'Copy it, clear and carry it over, or leave it for the next window.'],
 ];
 function render(t) {
@@ -108,12 +108,12 @@ function render(t) {
   else if (t >= 7000 && t < 7900) state = '<span class="dim">waiting for 1 background task before writing</span>';
   else if (t >= 7900 && t < 10300) state = `<span class="dim">${SPIN[Math.floor(t / 120) % SPIN.length]} writing a handoff…</span>`;
   else if (t >= 10300 && t < 11800) state = '<span class="ok">a handoff is ready</span>';
-  else if (t >= 11800 && t < 13000) state = '<span class="warn">the handoff is 1 turn old: h writes a new one</span>';
-  else if (t >= 13000 && t < 13600) state = '<span class="warn">the handoff is 2 turns old: h writes a new one</span>';
+  else if (t >= 11800 && t < 13000) state = '<span class="warn">the handoff is 1 turn old: 9 writes a new one</span>';
+  else if (t >= 13000 && t < 13600) state = '<span class="warn">the handoff is 2 turns old: 9 writes a new one</span>';
   else if (t >= 13600 && t < 16800) state = `<span class="dim">${SPIN[Math.floor(t / 120) % SPIN.length]} writing a handoff…</span>`;
   else if (t >= 16800) state = '<span class="ok">a handoff is ready</span>';
   const pressed = t >= 13400 && t < 14000;
-  $('#band').innerHTML = t < 6000 ? '' : `<span class="warn">● Context ${Math.round(p)}%</span>  ${state}\n${pressed ? '<span class="press">h</span>' : '<span class="key">h</span>'}: Hand off · <span class="key">z</span>: Later`;
+  $('#band').innerHTML = t < 6000 ? '' : `<span class="warn">● Context ${Math.round(p)}%</span>  ${state}\n${pressed ? '<span class="press">9</span>' : '<span class="key">9</span>'}: Hand off · <span class="key">0</span>: Later`;
   $('#band').style.opacity = out3(prog(t, 6000, 300));
   const pane = $('#pane');
   const k = out3(prog(t, 13600, 450));
